@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WebSocket Test</title>
+  <script src="https://cdn.socket.io/4.4.1/socket.io.min.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      // 서버에 연결 (NestJS 서버는 8080 포트에서 실행 중)
+      const socket = io('http://localhost:8080');
+      
+      // 연결 이벤트
+      socket.on('connect', () => {
+        console.log('Connected to server');
+        addMessage('Connected to server');
+      });
+      
+      // 에러 이벤트
+      socket.on('error', (data) => {
+        console.error('Error:', data);
+        addMessage(`Error: ${data.message}`);
+      });
+      
+      // 채팅방 입장 응답 이벤트
+      socket.on('joinedChatRoom', (data) => {
+        console.log('Joined chat room:', data);
+        addMessage(`Joined chat room: ${data.chatRoomId}`);
+      });
+      
+      // 메시지 수신 이벤트
+      socket.on('receiveMessage', (data) => {
+        console.log('Received message:', data);
+        addMessage(`Received: ${data.message} from user ${data.senderId}`);
+      });
+      
+      // 버튼 클릭 이벤트 처리
+      document.getElementById('joinBtn').addEventListener('click', () => {
+        const chatRoomId = parseInt(document.getElementById('chatRoomId').value);
+        if (isNaN(chatRoomId)) {
+          addMessage('Please enter a valid chat room ID');
+          return;
+        }
+        
+        // joinChatRoom 이벤트 전송
+        socket.emit('joinChatRoom', { chatRoomId });
+        addMessage(`Requesting to join chat room: ${chatRoomId}`);
+      });
+      
+      // 메시지 전송 버튼 클릭 이벤트
+      document.getElementById('sendBtn').addEventListener('click', () => {
+        const chatRoomId = parseInt(document.getElementById('chatRoomId').value);
+        const message = document.getElementById('messageInput').value;
+        const senderId = parseInt(document.getElementById('senderId').value);
+        
+        if (isNaN(chatRoomId) || !message || isNaN(senderId)) {
+          addMessage('Please fill all fields correctly');
+          return;
+        }
+        
+        // sendMessage 이벤트 전송
+        socket.emit('sendMessage', { chatRoomId, message, senderId });
+        addMessage(`Sending message: "${message}" to room: ${chatRoomId}`);
+      });
+      
+      function addMessage(message) {
+        const messagesDiv = document.getElementById('messages');
+        const messageElement = document.createElement('div');
+        messageElement.textContent = message;
+        messagesDiv.appendChild(messageElement);
+      }
+    });
+  </script>
+</head>
+<body>
+  <h1>WebSocket Test</h1>
+  <div>
+    <label for="chatRoomId">Chat Room ID:</label>
+    <input type="number" id="chatRoomId" value="1">
+    <button id="joinBtn">Join Chat Room</button>
+  </div>
+  <div style="margin-top: 10px;">
+    <label for="senderId">Sender ID:</label>
+    <input type="number" id="senderId" value="1">
+  </div>
+  <div style="margin-top: 10px;">
+    <label for="messageInput">Message:</label>
+    <input type="text" id="messageInput" style="width: 300px;">
+    <button id="sendBtn">Send Message</button>
+  </div>
+  <div id="messages" style="margin-top: 20px; border: 1px solid #ccc; padding: 10px; height: 300px; overflow-y: auto;"></div>
+</body>
+</html> 

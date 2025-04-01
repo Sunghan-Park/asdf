@@ -5,6 +5,7 @@ import { HashingService } from 'src/hash/hashing.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService, ConfigType } from '@nestjs/config';
 import jwtConfig from 'src/config/jwt.config';
+import { User } from 'src/user/entity/user.entity';
 
 @Injectable()
 export class AuthService {
@@ -36,6 +37,24 @@ export class AuthService {
       email: user.email,
     });
     return accessToken;
+  }
+
+  async verifyToken(token: string): Promise<User> {
+    try {
+      const actualToken = token.startsWith('Bearer ') ? token.slice(7) : token;
+      const payload = await this.jwtService.verifyAsync(actualToken, {
+        secret: this.jwtConfiguration.secret,
+      });
+
+      const user = await this.userService.findOneById(payload.sub);
+      if (!user) {
+        throw new UnauthorizedException('User not found');
+      }
+
+      return user;
+    } catch (error) {
+      throw new UnauthorizedException('Invalid token');
+    }
   }
 
   private async signToken(

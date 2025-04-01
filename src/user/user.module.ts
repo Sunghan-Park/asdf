@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { UserService } from './user.service';
 import { UserController } from './user.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { User } from './entities/user.entity';
+import { User } from './entity/user.entity';
 import { HashingService } from 'src/hash/hashing.service';
 import { BcryptService } from 'src/hash/bcrypt.service';
 import { ChatRoom } from 'src/chat/entity/chat-room.entity';

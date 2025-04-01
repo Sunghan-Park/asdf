@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Chat Test</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .controls {
+            margin-bottom: 20px;
+        }
+        #messages {
+            border: 1px solid #ccc;
+            padding: 10px;
+            height: 300px;
+            overflow-y: auto;
+        }
+        #status {
+            margin-top: 10px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebSocket Chat Test</h1>
+    <div class="controls">
+        <div>
+            <label for="serverUrl">Server URL:</label>
+            <input type="text" id="serverUrl" value="http://localhost:8080" style="width: 300px;">
+            <button id="connectBtn">Connect</button>
+            <button id="disconnectBtn" disabled>Disconnect</button>
+        </div>
+        <div id="status">Disconnected</div>
+    </div>
+
+    <div class="controls">
+        <h3>Join Chat Room</h3>
+        <div>
+            <label for="chatRoomId">Chat Room ID:</label>
+            <input type="number" id="chatRoomId" value="1">
+            <button id="joinRoomBtn" disabled>Join Room</button>
+        </div>
+    </div>
+
+    <div class="controls">
+        <h3>Send Message</h3>
+        <div>
+            <label for="message">Message:</label>
+            <input type="text" id="message" value="ㅇㅇㅇㅇ" style="width: 300px;">
+        </div>
+        <div>
+            <label for="sender">Sender ID:</label>
+            <input type="number" id="sender" value="1">
+        </div>
+        <div>
+            <label for="chatRoom">Chat Room ID:</label>
+            <input type="number" id="chatRoom" value="1">
+        </div>
+        <button id="sendBtn" disabled>Send Message</button>
+    </div>
+
+    <h3>Messages:</h3>
+    <div id="messages"></div>
+
+    <script>
+        let socket;
+        const statusEl = document.getElementById('status');
+        const messagesEl = document.getElementById('messages');
+
+        // Log function
+        function log(message) {
+            const now = new Date();
+            const timestamp = `${now.getHours()}:${now.getMinutes()}:${now.getSeconds()}`;
+            const logMessage = document.createElement('div');
+            logMessage.textContent = `[${timestamp}] ${message}`;
+            messagesEl.appendChild(logMessage);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        // Connect button
+        document.getElementById('connectBtn').addEventListener('click', () => {
+            const serverUrl = document.getElementById('serverUrl').value;
+            
+            try {
+                socket = io(serverUrl, {
+                    transports: ['websocket'],
+                    forceNew: true
+                });
+                
+                socket.on('connect', () => {
+                    log('Connected to server');
+                    statusEl.textContent = 'Connected';
+                    document.getElementById('connectBtn').disabled = true;
+                    document.getElementById('disconnectBtn').disabled = false;
+                    document.getElementById('joinRoomBtn').disabled = false;
+                    document.getElementById('sendBtn').disabled = false;
+                });
+
+                socket.on('disconnect', () => {
+                    log('Disconnected from server');
+                    statusEl.textContent = 'Disconnected';
+                    document.getElementById('connectBtn').disabled = false;
+                    document.getElementById('disconnectBtn').disabled = true;
+                    document.getElementById('joinRoomBtn').disabled = true;
+                    document.getElementById('sendBtn').disabled = true;
+                });
+
+                socket.on('error', (data) => {
+                    log(`Error: ${JSON.stringify(data)}`);
+                });
+
+                socket.on('receiveMessage', (data) => {
+                    log(`Received message: ${JSON.stringify(data)}`);
+                });
+
+                socket.on('joinedChatRoom', (data) => {
+                    log(`Joined chat room: ${JSON.stringify(data)}`);
+                });
+
+                socket.on('connect_error', (err) => {
+                    log(`Connection error: ${err.message}`);
+                });
+            } catch (error) {
+                log(`Failed to connect: ${error.message}`);
+            }
+        });
+
+        // Disconnect button
+        document.getElementById('disconnectBtn').addEventListener('click', () => {
+            if (socket) {
+                socket.disconnect();
+            }
+        });
+
+        // Join room button
+        document.getElementById('joinRoomBtn').addEventListener('click', () => {
+            const chatRoomId = parseInt(document.getElementById('chatRoomId').value);
+            if (socket && chatRoomId) {
+                log(`Joining room: ${chatRoomId}`);
+                socket.emit('joinChatRoom', { chatRoomId });
+            }
+        });
+
+        // Send message button
+        document.getElementById('sendBtn').addEventListener('click', () => {
+            const message = document.getElementById('message').value;
+            const sender = parseInt(document.getElementById('sender').value);
+            const chatRoom = parseInt(document.getElementById('chatRoom').value);
+
+            if (socket && message && sender && chatRoom) {
+                const payload = {
+                    message,
+                    sender,
+                    chatRoom
+                };
+                log(`Sending message: ${JSON.stringify(payload)}`);
+                socket.emit('sendMessage', payload);
+            }
+        });
+    </script>
+</body>
+</html> 

@@ -1,21 +1,19 @@
-import { Chat } from 'src/chat/entity/chat.entity';
-import { User } from 'src/user/entities/user.entity';
-import {
-  BaseEntity,
-  Entity,
-  ManyToMany,
-  OneToMany,
-  PrimaryGeneratedColumn,
-} from 'typeorm';
+import { Chat } from './chat.entity';
+import { Participants } from './participants.entity';
+import { Column, Entity, OneToMany, PrimaryGeneratedColumn } from 'typeorm';
+import { BaseEntity } from '../common/entity/base.entity';
 
 @Entity()
 export class ChatRoom extends BaseEntity {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToMany(() => User, (user) => user.chatRooms)
-  users: User[];
+  @Column({ nullable: true, default: null })
+  name: string;
 
   @OneToMany(() => Chat, (chat) => chat.chatRoom)
-  messages: Chat[];
+  chats: Chat[];
+
+  @OneToMany(() => Participants, (participant) => participant.chatRoom)
+  participants: Participants[];
 }

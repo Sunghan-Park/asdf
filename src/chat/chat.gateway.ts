@@ -1,106 +1,305 @@
 import {
-  ConnectedSocket,
-  MessageBody,
   SubscribeMessage,
   WebSocketGateway,
+  MessageBody,
+  ConnectedSocket,
   WebSocketServer,
+  OnGatewayConnection,
+  OnGatewayDisconnect,
 } from '@nestjs/websockets';
-import { Server, Socket } from 'socket.io';
 import { ChatService } from './chat.service';
+import { Socket } from 'socket.io';
 import { UserService } from 'src/user/user.service';
-import { ChatRoomService } from './chat-room.service';
+import { AuthService } from 'src/auth/auth.service';
+import { Server } from 'socket.io';
+import { User } from 'src/user/entity/user.entity';
+import { CreateChatRoomDto } from './dto/create-chat-room.dto';
+import { NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { AddParticipantsDto } from './dto/add-participants.dto';
+import { EditMessageDto } from './dto/edit-message.dto';
+
+interface AuthenticatedSocket extends Socket {
+  user: User;
+}
+
 @WebSocketGateway({
   cors: {
     origin: '*',
-    methods: ['GET', 'POST'],
   },
 })
-export class ChatGateway {
+export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
+
   constructor(
     private readonly chatService: ChatService,
     private readonly userService: UserService,
-    private readonly chatRoomService: ChatRoomService,
+    private readonly authService: AuthService,
   ) {}
 
-  private activeUsers = new Map<number, string>();
-
-  handleConnection(@ConnectedSocket() client: Socket) {
-    console.log(`Client connected: ${client.id}`);
+  handleDisconnect(client: AuthenticatedSocket) {
+    console.log('Client disconnected', client.id);
   }
 
-  handleDisconnect(@ConnectedSocket() client: Socket) {
-    console.log(`Client disconnected: ${client.id}`);
-    for (const [userId, socketId] of this.activeUsers.entries()) {
-      if (socketId === client.id) {
-        this.activeUsers.delete(userId);
-        console.log(`User ${userId} disconnected`);
-        break;
+  async handleConnection(client: AuthenticatedSocket) {
+    try {
+      const authHeader = client.handshake.headers.authorization;
+      if (!authHeader) {
+        throw new UnauthorizedException('No authorization header provided');
       }
+
+      const user = await this.authService.verifyToken(authHeader);
+      client.user = user;
+    } catch (error) {
+      console.error('Connection error:', error);
+      client.disconnect();
     }
   }
 
-  @SubscribeMessage('join')
-  async handleJoin(
-    @MessageBody() data: { userId: number; receiverId: number },
-    @ConnectedSocket() client: Socket,
+  @SubscribeMessage('createChatRoom')
+  async handleCreateChatRoom(
+    @MessageBody() createChatRoomDto: CreateChatRoomDto,
+    @ConnectedSocket() client: AuthenticatedSocket,
   ) {
-    const user = await this.userService.findOneById(data.userId);
-    const receiver = await this.userService.findOneById(data.receiverId);
-    if (user && receiver) {
-      const chatRoom = await this.chatRoomService.createChatRoom([
-        user,
-        receiver,
-      ]);
-      this.server.to(client.id).emit('chatRoomCreated', chatRoom);
-    } else {
-      console.log(`User ${data.userId} already joined`);
-    }
-  }
+    try {
+      // 생성자만 참여자로 추가
+      createChatRoomDto.participants = [client.user.id];
 
-  @SubscribeMessage('message')
-  handleMessage(
-    @MessageBody()
-    data: {
-      userId: number;
-      receiverId: number;
-      content: string;
-    },
-  ) {
-    if (
-      this.activeUsers.has(data.userId) ||
-      this.activeUsers.has(data.receiverId)
-    ) {
-      console.log('User is online');
-    } else {
-      console.log('User is offline');
-    }
-    const receiverSocketId = this.activeUsers.get(data.receiverId);
-    if (receiverSocketId) {
-      this.server.to(receiverSocketId).emit('message', {
-        senderId: data.userId,
-        content: data.content,
-      });
-    }
-    console.log(
-      `received message from ${data.userId}, content: ${data.content}`,
-    );
-  }
+      const chatRoom = await this.chatService.createChatRoom(createChatRoomDto);
+      if (!chatRoom) {
+        throw new Error('Failed to create chat room');
+      }
 
-  @SubscribeMessage('receivedMessage')
-  handleReceivedMessage(
-    @MessageBody()
-    data: {
-      userId: number;
-      receiverId: number;
-      content: string;
-    },
-  ) {
-    if (this.activeUsers.has(data.userId)) {
-      console.log(
-        `received message from ${data.userId}. content: ${data.content}`,
+      // 생성된 채팅방에 자동으로 참여
+      await this.chatService.joinChatRoom(
+        { chatRoomId: chatRoom.id },
+        client.user,
       );
+
+      client.emit('chatRoomCreated', chatRoom);
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        client.emit('error', { message: error.message });
+      } else {
+        client.emit('error', { message: 'An unknown error occurred' });
+      }
+      throw error;
+    }
+  }
+
+  @SubscribeMessage('getChatRoom')
+  async handleGetChatRoom(
+    @MessageBody() payload: { chatRoomId: number },
+    @ConnectedSocket() client: AuthenticatedSocket,
+  ) {
+    try {
+      const chatRoom = await this.chatService.findChatRoomById(
+        payload.chatRoomId,
+      );
+      client.emit('chatRoom', chatRoom);
+    } catch (error) {
+      console.error('Get chat room error:', error);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+      client.emit('error', { message: error.message });
+    }
+  }
+
+  @SubscribeMessage('joinChatRoom')
+  async handleJoinChatRoom(
+    @MessageBody() payload: { chatRoomId: number },
+    @ConnectedSocket() client: AuthenticatedSocket,
+  ) {
+    try {
+      const { chatRoomId } = payload;
+      const existingParticipant = await this.chatService.isParticipant(
+        chatRoomId,
+        client.user.id,
+      );
+      if (existingParticipant) {
+        throw new UnauthorizedException(
+          'You are already a participant of this chat room',
+        );
+      }
+      await this.chatService.joinChatRoom({ chatRoomId }, client.user);
+      await client.join(`chat:${chatRoomId}`);
+      client.emit('joinedChatRoom', { chatRoomId });
+      this.server.to(`chat:${chatRoomId}`).emit('receiveMessage', {
+        message: 'New user joined the chat room',
+        sender: client.user.name,
+      });
+    } catch (error) {
+      console.error('Join chat room error:', error);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+      client.emit('error', { message: error.message });
+    }
+  }
+
+  @SubscribeMessage('sendMessage')
+  async handleMessage(
+    @MessageBody() payload: { message: string; chatRoomId: number },
+    @ConnectedSocket() client: AuthenticatedSocket,
+  ) {
+    try {
+      const { message, chatRoomId } = payload;
+      const participant = await this.chatService.isParticipant(
+        chatRoomId,
+        client.user.id,
+      );
+      if (!participant || !participant.isActive) {
+        throw new UnauthorizedException(
+          'You are not a participant of this chat room',
+        );
+      }
+      const savedMessage = await this.chatService.createMessage(
+        { message, chatRoomId },
+        client.user,
+      );
+
+      if (!savedMessage) {
+        throw new Error('Failed to save message');
+      }
+
+      this.server.to(`chat:${chatRoomId}`).emit('receiveMessage', {
+        message: savedMessage.message,
+        sender: client.user.name,
+      });
+    } catch (error) {
+      console.error('Send message error:', error);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+      client.emit('error', { message: error.message });
+    }
+  }
+
+  @SubscribeMessage('deleteMessage')
+  async handleDeleteMessage(
+    @MessageBody() payload: { chatRoomId: number; messageId: number },
+    @ConnectedSocket() client: AuthenticatedSocket,
+  ){
+    try {
+      const { chatRoomId, messageId } = payload;
+      const participant = await this.chatService.isParticipant(
+        chatRoomId,
+        client.user.id,
+      );
+      if (!participant || !participant.isActive) {
+        throw new UnauthorizedException(
+          'You are not a participant of this chat room',
+        );
+      }
+      await this.chatService.deleteMessage(messageId, chatRoomId, client.user);
+      this.server.to(`chat:${chatRoomId}`).emit('receiveMessage', {
+        message: 'Message deleted',
+        sender: client.user.name,
+      });
+    } catch (error) {
+      console.error('Delete message error:', error);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+      client.emit('error', { message: error.message });
+    }
+  }
+  @SubscribeMessage('editMessage')
+  async handleEditMessage(
+    @MessageBody() payload: EditMessageDto,
+    @ConnectedSocket() client: AuthenticatedSocket,
+  ) {
+    try {
+      const editedMessage = await this.chatService.editMessage(
+        payload,
+        client.user,
+      );
+      this.server.to(`chat:${payload.chatRoomId}`).emit('receiveMessage', {
+        message: editedMessage.message,
+        sender: client.user.name,
+      });
+    } catch (error) {
+      console.error('Edit message error:', error);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+      client.emit('error', { message: error.message });
+    }
+  }
+
+
+  @SubscribeMessage('addParticipants')
+  async handleAddParticipants(
+    @MessageBody() data: AddParticipantsDto,
+    @ConnectedSocket() client: AuthenticatedSocket,
+  ) {
+    try {
+      const result = await this.chatService.addParticipantsWithValidation(
+        data.chatRoomId,
+        data.userIds,
+        client.user.id,
+      );
+
+      // 채팅방의 모든 참여자에게 새로운 참여자 추가 알림
+      this.server
+        .to(`chat:${data.chatRoomId}`)
+        .emit('participantsAdded', result);
+
+      return result;
+    } catch (error: unknown) {
+      if (error instanceof UnauthorizedException) {
+        client.emit('error', { message: error.message });
+      } else if (error instanceof NotFoundException) {
+        client.emit('error', { message: error.message });
+      } else if (error instanceof Error) {
+        client.emit('error', { message: error.message });
+      } else {
+        client.emit('error', { message: 'Failed to add participants' });
+      }
+      throw error;
+    }
+  }
+
+  @SubscribeMessage('leaveChatRoom')
+  async handleLeaveChatRoom(
+    @MessageBody() payload: { chatRoomId: number },
+    @ConnectedSocket() client: AuthenticatedSocket,
+  ) {
+    try {
+      const { chatRoomId } = payload;
+      const participant = await this.chatService.isParticipant(
+        chatRoomId,
+        client.user.id,
+      );
+
+      if (!participant || !participant.isActive) {
+        throw new UnauthorizedException(
+          'You are not a participant of this chat room',
+        );
+      }
+      await this.chatService.leaveChatRoom({ chatRoomId }, client.user);
+      await client.leave(`chat:${chatRoomId}`);
+      client.emit('leftChatRoom', { chatRoomId });
+      this.server.to(`chat:${chatRoomId}`).emit('receiveMessage', {
+        message: 'User left the chat room',
+        sender: client.user.name,
+      });
+    } catch (error) {
+      console.error('Leave chat room error:', error);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+      client.emit('error', { message: error.message });
+    }
+  }
+
+  @SubscribeMessage('exitChatRoom')
+  async handleExitChatRoom(
+    @MessageBody() payload: { chatRoomId: number },
+    @ConnectedSocket() client: AuthenticatedSocket,
+  ) {
+    try {
+      const { chatRoomId } = payload;
+      await this.chatService.exitChatRoom({ chatRoomId }, client.user);
+      await client.leave(`chat:${chatRoomId}`);
+      client.emit('exitedChatRoom', { chatRoomId });
+      this.server.to(`chat:${chatRoomId}`).emit('receiveMessage', {
+        message: 'User exited the chat room',
+        sender: client.user.name,
+      });
+    } catch (error) {
+      console.error('Exit chat room error:', error);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+      client.emit('error', { message: error.message });
     }
   }
 }
